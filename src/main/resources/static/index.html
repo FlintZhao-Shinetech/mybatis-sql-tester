@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyBatis SQL Tester</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+         margin: 0; background: #f5f6fa; color: #2c3e50; }
+  header { background: #2c3e50; color: #fff; padding: 14px 22px; font-size: 17px; font-weight: 600; }
+  .tabs { display: flex; background: #34495e; }
+  .tabs button { background: none; border: none; color: #bdc3c7; padding: 12px 20px; cursor: pointer;
+                 font-size: 14px; }
+  .tabs button.active { color: #fff; border-bottom: 3px solid #3498db; }
+  .wrap { padding: 20px 22px; max-width: 1400px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 8px; padding: 18px; margin-bottom: 16px;
+          box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; color: #555; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid #dcdde1; border-radius: 5px;
+                  font-size: 13px; font-family: inherit; }
+  textarea { font-family: monospace; font-size: 12px; }
+  .row { display: flex; gap: 14px; }
+  .row > div { flex: 1; }
+  button.primary { background: #3498db; color: #fff; border: none; padding: 9px 18px; border-radius: 5px;
+                   cursor: pointer; font-size: 13px; }
+  button.primary:hover { background: #2980b9; }
+  button.ghost { background: #ecf0f1; color: #2c3e50; border: none; padding: 7px 13px; border-radius: 5px;
+                 cursor: pointer; font-size: 12px; }
+  button.ghost:hover { background: #dfe6e9; }
+  .muted { color: #95a5a6; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #ecf0f1; vertical-align: top; }
+  th { background: #f8f9fb; color: #7f8c8d; font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; background: #f4f6f7; color: #7f8c8d; }
+  .tag.ok { background: #eafaf1; color: #27ae60; }
+  .tag.warn { background: #fef5e7; color: #e67e22; }
+  .tag.err { background: #fdedec; color: #c0392b; }
+  .tag.src { background: #eaf2f8; color: #2980b9; }
+  .tag.user { background: #f4ecf7; color: #8e44ad; }
+  pre.sql { background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 6px; overflow-x: auto;
+            font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+  .stmt { border: 1px solid #ecf0f1; border-radius: 6px; margin-bottom: 12px; background: #fff; }
+  .stmt > .head { padding: 11px 14px; background: #f8f9fb; cursor: pointer; display: flex;
+                  justify-content: space-between; align-items: center; }
+  .stmt > .body { padding: 14px; display: none; }
+  .stmt.open > .body { display: block; }
+  .badge { background: #3498db; color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; margin-left: 8px; }
+  .badge.grey { background: #95a5a6; }
+  .badge.green { background: #27ae60; }
+  .badge.red { background: #c0392b; }
+  .case { border-left: 3px solid #ecf0f1; padding-left: 12px; margin-bottom: 16px; }
+  .case.ok { border-left-color: #27ae60; }
+  .case.err { border-left-color: #c0392b; }
+  .sub { font-size: 12.5px; color: #7f8c8d; margin: 6px 0; }
+  code { background: #f4f6f7; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+  .kv { display: inline-block; margin-right: 14px; }
+  .kv b { color: #2c3e50; }
+  .bar { height: 6px; background: #ecf0f1; border-radius: 3px; overflow: hidden; display: inline-block;
+         width: 110px; vertical-align: middle; }
+  .bar > i { display: block; height: 100%; background: #27ae60; }
+</style>
+</head>
+<body>
+<header>MyBatis SQL Tester — 数据库迁移测试 SQL 生成器</header>
+<div class="tabs">
+  <button class="active" data-tab="scan">项目扫描</button>
+  <button data-tab="confirm">参数确认</button>
+  <button data-tab="sql">测试 SQL</button>
+  <button data-tab="db">目标数据库</button>
+</div>
+
+<div class="wrap" id="tab-scan">
+  <div class="card">
+    <h3 style="margin-top:0">扫描项目</h3>
+    <label>项目根路径</label>
+    <input id="projectPath" placeholder="/workspace/your-project">
+    <div class="row">
+      <div>
+        <label>项目名（用于 SQLite 决策库文件名）</label>
+        <input id="projectName" placeholder="留空则取目录名">
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="primary" onclick="doScan()">开始扫描</button>
+      </div>
+    </div>
+    <p class="muted" id="scanInfo"></p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">解析出的参数类型</h3>
+    <table id="typeTable">
+      <thead><tr><th>语句</th><th>参数</th><th>Java 类型</th><th>来源</th><th>备注</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="wrap" id="tab-confirm" style="display:none">
+  <div class="card">
+    <h3 style="margin-top:0">待确认参数类型</h3>
+    <p class="muted">以下参数无法从代码或 XML 自动推断类型，请选择一次；结果会写入 SQLite，下次不再询问。</p>
+    <table id="pendingTable">
+      <thead><tr><th>语句</th><th>参数</th><th>已声明 jdbcType</th><th>选择 Java 类型</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="wrap" id="tab-sql" style="display:none">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0">测试 SQL（覆盖全部分支）</h3>
+      <div>
+        <button class="ghost" onclick="doGenerate()">重新生成</button>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:4px;margin-right:8px">
+          <input type="checkbox" id="commitChanges"> 提交事务（默认全部回滚，不写入测试数据）
+        </label>
+        <button class="primary" onclick="runTest(null)">在目标库执行全部语句</button>
+      </div>
+    </div>
+    <p class="muted" id="coverInfo"></p>
+  </div>
+  <div id="unresolved"></div>
+  <div id="stmts"></div>
+</div>
+
+<div class="wrap" id="tab-db" style="display:none">
+  <div class="card">
+    <h3 style="margin-top:0">目的端数据库配置</h3>
+    <label>JDBC 驱动类名（如 dm.jdbc.driver.DmDriver / com.mysql.cj.jdbc.Driver）</label>
+    <input id="driverClass">
+    <label>JDBC URL</label>
+    <input id="jdbcUrl">
+    <div class="row">
+      <div><label>用户名</label><input id="username"></div>
+      <div><label>密码</label><input id="password" type="password"></div>
+    </div>
+    <label>驱动 Jar 路径（多个用逗号分隔，达梦/Oracle 等需手动指定）</label>
+    <input id="driverJars" placeholder="/path/to/DmJdbcDriver18.jar">
+    <div style="margin-top:14px"><button class="primary" onclick="saveDb()">保存配置</button></div>
+    <p class="muted" id="dbInfo"></p>
+  </div>
+</div>
+
+<script>
+let currentTab = 'scan';
+let lastScan = null;
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  currentTab = b.dataset.tab;
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
+  ['scan','confirm','sql','db'].forEach(t => document.getElementById('tab-'+t).style.display = (t===currentTab?'':'none'));
+  if (currentTab === 'db') loadDb();
+});
+
+async function api(path, body) {
+  const r = await fetch('/api/' + path, {
+    method: body ? 'POST' : 'GET',
+    headers: {'Content-Type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return r.json();
+}
+
+async function doScan() {
+  const projectPath = document.getElementById('projectPath').value.trim();
+  const projectName = document.getElementById('projectName').value.trim() || undefined;
+  document.getElementById('scanInfo').textContent = '扫描中…';
+  const res = await api('scan', {projectPath, projectName});
+  lastScan = res;
+  document.getElementById('scanInfo').innerHTML =
+    '项目: <b>' + res.projectName + '</b> · mapper XML: ' + res.xmlCount +
+    ' · 语句: ' + res.statementCount + ' · 待确认参数: ' + res.pendingTypes.length +
+    '<br>决策库 (SQLite): <code>' + (res.sqliteFile || '-') + '</code>';
+  renderPending(res.pendingTypes);
+  renderTypes(res.statements);
+  renderStatements(res.statements);
+}
+
+const TYPES = ['String','Integer','Long','BigDecimal','Double','Boolean','Date','LocalDate','LocalDateTime','byte[]'];
+
+function renderPending(list) {
+  const tb = document.querySelector('#pendingTable tbody');
+  tb.innerHTML = '';
+  if (!list || !list.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="muted">无待确认参数 ✓</td></tr>';
+    return;
+  }
+  list.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${p.stmtId}</td><td><code>${p.paramName}</code></td>
+      <td>${p.declaredJdbcType || '-'}</td>
+      <td><select id="sel_${btoa(p.stmtId+'|'+p.paramName)}">
+        ${TYPES.map(t=>`<option>${t}</option>`).join('')}</select></td>
+      <td><button class="ghost" onclick='saveType(${JSON.stringify(p)})'>保存</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+async function saveType(p) {
+  const key = btoa(p.stmtId+'|'+p.paramName);
+  const v = document.getElementById('sel_'+key).value;
+  const res = await api('param-type', {stmtId:p.stmtId, paramName:p.paramName, javaType:v});
+  renderPending(res.pendingTypes);
+}
+
+function renderTypes(stmts) {
+  const tb = document.querySelector('#typeTable tbody');
+  tb.innerHTML = '';
+  let any = false;
+  (stmts || []).forEach(st => {
+    (st.params || []).forEach(p => {
+      any = true;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${st.namespace}.${st.id}</td><td><code>${p.name}</code></td>
+        <td>${p.javaType || '-'}</td><td>${srcTag(p.typeSource)}</td>
+        <td class="muted">${p.itemOf ? 'foreach 项，集合 ' + p.itemOf : (p.declaredJdbcType ? 'jdbcType=' + p.declaredJdbcType : '')}</td>`;
+      tb.appendChild(tr);
+    });
+  });
+  if (!any) tb.innerHTML = '<tr><td colspan="5" class="muted">没有参数</td></tr>';
+}
+
+async function doGenerate() {
+  const res = await api('generate', {});
+  renderStatements(res.statements);
+  renderUnresolved(res.statements);
+  const total = (res.statements||[]).reduce((n, st) => n + Object.keys(st.coverageUnits||{}).length, 0);
+  const unresolved = (res.statements||[]).reduce((n, st) => n + (st.unresolvedBranches||[]).length, 0);
+  document.getElementById('coverInfo').innerHTML =
+    '共 ' + total + ' 个分支覆盖点，' + unresolved + ' 个未自动满足。点击语句展开用例与执行结果。';
+}
+
+function renderUnresolved(stmts) {
+  const box = document.getElementById('unresolved');
+  box.innerHTML = '';
+  const items = [];
+  (stmts||[]).forEach(st => (st.unresolvedBranches||[]).forEach(u =>
+    items.push({stmtId: st.namespace + '.' + st.id, unit: u})));
+  unresolvedCache = items;
+  if (!items.length) return;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = '<h3 style="margin-top:0">未能自动满足的分支</h3>' +
+    '<p class="muted">为这些分支手工指定参数值（JSON），保存后会写入 SQLite 并参与生成。</p>';
+  items.forEach((it, i) => {
+    const u = it.unit;
+    const d = document.createElement('div');
+    d.style.marginBottom = '12px';
+    d.innerHTML = `<div class="sub"><b>${it.stmtId}</b> · ${u.description || u.unitId}
+        <span class="tag warn">${u.kind}</span></div>
+      <div class="muted">条件: <code>${escapeHtml(u.expression || '-')}</code> · 原因: ${escapeHtml(u.reason || '')}</div>
+      <textarea rows="2" id="bp_${i}" placeholder='{"参数名": 值}'>{}</textarea>
+      <button class="ghost" onclick="saveBranchParams(${i})">保存参数</button>`;
+    card.appendChild(d);
+  });
+  box.appendChild(card);
+}
+
+async function saveBranchParams(i) {
+  const raw = document.getElementById('bp_' + i).value.trim() || '{}';
+  let params;
+  try { params = JSON.parse(raw); } catch (e) { alert('参数必须是合法 JSON: ' + e.message); return; }
+  const it = unresolvedCache[i];
+  await api('branch-params', {stmtId: it.stmtId, branchId: it.unit.unitId, params});
+  await doGenerate();
+}
+
+let unresolvedCache = [];
+
+function renderStatements(stmts) {
+  const box = document.getElementById('stmts');
+  if (!box) return;
+  box.innerHTML = '';
+  (stmts || []).forEach(st => {
+    const d = document.createElement('div');
+    d.className = 'stmt';
+    const branchN = st.branches ? st.branches.length : 0;
+    const caseN = st.testCases ? st.testCases.length : 0;
+    const units = Object.keys(st.coverageUnits || {});
+    const covered = new Set();
+    (st.testCases || []).forEach(tc => (tc.coveredBranches || []).forEach(b => covered.add(b)));
+    const pct = units.length ? Math.round(covered.size * 100 / units.length) : 100;
+    const cov = units.length
+      ? `<span class="badge ${pct === 100 ? 'green' : 'red'}">${covered.size}/${units.length} 覆盖</span>
+         <span class="bar"><i style="width:${pct}%"></i></span>`
+      : '<span class="badge grey">无动态分支</span>';
+    d.innerHTML = `<div class="head" onclick="this.parentNode.classList.toggle('open')">
+        <span><b>${st.namespace}.${st.id}</b> <span class="badge grey">${st.type}</span>
+        <span class="badge">${branchN} 分支</span>
+        <span class="badge">${caseN} 用例</span>${cov}</span>
+        <span class="muted">${(st.xmlFile||'').split('/').pop()}</span>
+      </div><div class="body"></div>`;
+    const body = d.querySelector('.body');
+
+    const pt = document.createElement('table');
+    pt.innerHTML = '<thead><tr><th>参数</th><th>Java 类型</th><th>来源</th></tr></thead><tbody>' +
+      (st.params||[]).map(p => `<tr><td><code>${p.name}</code></td><td>${p.javaType||'-'}</td>
+        <td>${srcTag(p.typeSource)}</td></tr>`).join('') + '</tbody>';
+    body.appendChild(pt);
+
+    if (units.length) {
+      const h = document.createElement('p');
+      h.innerHTML = '<b>分支覆盖点</b>';
+      body.appendChild(h);
+      const ct = document.createElement('table');
+      ct.innerHTML = '<thead><tr><th>覆盖点</th><th>说明</th><th>状态</th></tr></thead><tbody>' +
+        units.map(id => {
+          const ok = covered.has(id);
+          const desc = st.coverageUnits[id];
+          return `<tr><td><code>${escapeHtml(id)}</code></td><td>${escapeHtml(desc||'')}</td>
+            <td>${ok ? '<span class="tag ok">已覆盖</span>' : '<span class="tag err">未覆盖</span>'}</td></tr>`;
+        }).join('') + '</tbody>';
+      body.appendChild(ct);
+    }
+
+    if (st.testCases && st.testCases.length) {
+      const h = document.createElement('p');
+      h.innerHTML = '<b>测试用例</b>';
+      body.appendChild(h);
+      st.testCases.forEach(tc => {
+        const c = document.createElement('div');
+        c.className = 'case' + (tc.success === true ? ' ok' : (tc.success === false ? ' err' : ''));
+        let state = '';
+        if (tc.success === true) state = ' <span class="tag ok">通过 ' + tc.elapsedMs + 'ms</span>';
+        else if (tc.success === false) state = ' <span class="tag err">失败</span>';
+        else state = ' <span class="tag">未执行</span>';
+        if (tc.manual) state += ' <span class="tag user">手工参数</span>';
+        c.innerHTML = `<div style="font-size:12.5px;margin:4px 0"><b>${escapeHtml(tc.name||'')}</b>${state}</div>
+          <div class="muted">参数: <code>${escapeHtml(JSON.stringify(tc.params))}</code></div>
+          ${tc.note ? '<div class="muted">提示: ' + escapeHtml(tc.note) + '</div>' : ''}
+          ${tc.error ? '<div class="muted" style="color:#c0392b">错误: ' + escapeHtml(tc.error) + '</div>' : ''}
+          <pre class="sql">${escapeHtml(tc.renderedSql||'')}</pre>`;
+        if (tc.columns && tc.columns.length) {
+          const rt = document.createElement('table');
+          rt.innerHTML = '<thead><tr>' + tc.columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead><tbody>' +
+            (tc.rows||[]).map(r => '<tr>' + r.map(v => `<td>${escapeHtml(String(v))}</td>`).join('') + '</tr>').join('') +
+            '</tbody>';
+          c.appendChild(rt);
+        }
+        if (tc.updateCount) {
+          const u = document.createElement('div');
+          u.className = 'muted';
+          u.textContent = '影响行数: ' + tc.updateCount;
+          c.appendChild(u);
+        }
+        body.appendChild(c);
+      });
+      const run = document.createElement('button');
+      run.className = 'primary';
+      run.textContent = '在目标库执行该语句的全部用例';
+      run.onclick = () => runTest(st.namespace + '.' + st.id);
+      body.appendChild(run);
+    }
+    box.appendChild(d);
+  });
+}
+
+function srcTag(s) {
+  if (s === 'USER') return '<span class="tag user">用户确认</span>';
+  if (s === 'UNKNOWN' || !s) return '<span class="tag warn">未知</span>';
+  return '<span class="tag src">' + s + '</span>';
+}
+
+async function runTest(stmtId) {
+  const commit = document.getElementById('commitChanges').checked;
+  const res = await api('test', stmtId ? {stmtId, commit} : {commit});
+  if (!res.ok) { alert(res.error); return; }
+  renderStatements(res.statements);
+  renderUnresolved(res.statements);
+  document.querySelectorAll('.stmt').forEach(e => e.classList.add('open'));
+}
+
+async function loadDb() {
+  const c = await api('db-config');
+  driverClass_.value = c.driverClass || '';
+  jdbcUrl_.value = c.jdbcUrl || '';
+  username_.value = c.username || '';
+  password_.value = c.password || '';
+  driverJars_.value = c.driverJars || '';
+}
+const driverClass_ = document.getElementById('driverClass');
+const jdbcUrl_ = document.getElementById('jdbcUrl');
+const username_ = document.getElementById('username');
+const password_ = document.getElementById('password');
+const driverJars_ = document.getElementById('driverJars');
+
+async function saveDb() {
+  await api('db-config', {
+    driverClass: driverClass_.value, jdbcUrl: jdbcUrl_.value,
+    username: username_.value, password: password_.value, driverJars: driverJars_.value
+  });
+  document.getElementById('dbInfo').textContent = '已保存到 SQLite。';
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.mapper.UserMapper">
+
+    <sql id="baseColumns">id, user_name, age, email, create_time</sql>
+
+    <select id="selectById" resultType="com.example.entity.User">
+        SELECT <include refid="baseColumns"/>
+        FROM t_user
+        WHERE id = #{id,jdbcType=BIGINT}
+    </select>
+
+    <select id="search" resultType="com.example.entity.User">
+        SELECT <include refid="baseColumns"/>
+        FROM t_user
+        <where>
+            <if test="userName != null and userName != ''">
+                AND user_name LIKE CONCAT('%', #{userName}, '%')
+            </if>
+            <if test="age != null and age &gt; 0">
+                AND age = #{age}
+            </if>
+        </where>
+        ORDER BY id
+    </select>
+
+    <select id="selectByIds" resultType="com.example.entity.User">
+        SELECT <include refid="baseColumns"/>
+        FROM t_user
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </select>
+
+    <insert id="insert" parameterType="com.example.entity.User">
+        INSERT INTO t_user (user_name, age, email, create_time)
+        VALUES (#{userName}, #{age}, #{email}, #{createTime})
+    </insert>
+
+    <update id="updateSelective" parameterType="com.example.entity.User">
+        UPDATE t_user
+        <set>
+            <if test="userName != null">user_name = #{userName},</if>
+            <if test="age != null">age = #{age},</if>
+            <if test="email != null">email = #{email},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <select id="searchByPattern" resultType="com.example.entity.User">
+        SELECT <include refid="baseColumns"/>
+        FROM t_user
+        <where>
+            <if test="userName != null and userName.matches('.*test.*')">
+                AND user_name LIKE #{userName}
+            </if>
+        </where>
+    </select>
+
+    <select id="selectWithMap" resultType="com.example.entity.User">
+        SELECT <include refid="baseColumns"/>
+        FROM t_user
+        <where>
+            <choose>
+                <when test="params.status == 'A'">
+                    AND age &gt; 18
+                </when>
+                <when test="params.status == 'B'">
+                    AND age &lt;= 18
+                </when>
+                <otherwise>
+                    AND 1 = 1
+                </otherwise>
+            </choose>
+        </where>
+    </select>
+
+</mapper>
