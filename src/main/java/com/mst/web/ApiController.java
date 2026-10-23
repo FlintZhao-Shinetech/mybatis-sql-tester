@@ -56,31 +56,10 @@ public class ApiController {
         rootsByStmt = new LinkedHashMap<String, Map<String, RootType>>();
         renderedByStmt = new LinkedHashMap<String, List<SqlRenderer.Rendered>>();
 
-        TypeResolver resolver = new TypeResolver(ifaceScanner);
-        for (Statement st : statements) {
-            resolver.resolve(st);
-            Map<String, RootType> roots = new LinkedHashMap<String, RootType>();
-            for (Object o : st.rootTypes.values()) {
-                RootType rt = (RootType) o;
-                roots.put(rt.name, rt);
-            }
-            rootsByStmt.put(st.fullId(), roots);
-        }
+        resolveAll();
 
         renderer = new SqlRenderer();
         renderer.loadAll(xmlScanner.xmlFiles);
-
-        // apply any previously-saved decisions
-        Map<String, String> saved = store.getAllParamTypes();
-        for (Statement st : statements) {
-            for (ParamRef p : st.params) {
-                String v = saved.get(st.fullId() + "\u0000" + p.name);
-                if (v != null) {
-                    p.javaType = v;
-                    p.typeSource = "USER";
-                }
-            }
-        }
 
         Map<String, Object> out = new LinkedHashMap<String, Object>();
         out.put("projectName", projectName);
@@ -91,7 +70,48 @@ public class ApiController {
         out.put("statements", statements);
         out.put("pendingTypes", pendingTypes());
         out.put("unresolvedBranches", unresolvedBranches());
+        out.put("knownTypes", knownTypes());
         return out;
+    }
+
+    /**
+     * Re-runs type resolution for every statement, including the types the
+     * user already confirmed. Called after a scan and after a type is saved so
+     * the confirmed type immediately influences the generated parameters.
+     */
+    private void resolveAll() {
+        TypeResolver resolver = new TypeResolver(ifaceScanner);
+        Map<String, String> saved = store.getAllParamTypes();
+        rootsByStmt = new LinkedHashMap<String, Map<String, RootType>>();
+        for (Statement st : statements) {
+            Map<String, String> userTypes = new LinkedHashMap<String, String>();
+            String prefix = st.fullId() + "\u0000";
+            for (Map.Entry<String, String> e : saved.entrySet()) {
+                if (e.getKey().startsWith(prefix)) {
+                    userTypes.put(e.getKey().substring(prefix.length()), e.getValue());
+                }
+            }
+            resolver.resolve(st, userTypes);
+            Map<String, RootType> roots = new LinkedHashMap<String, RootType>();
+            for (Object o : st.rootTypes.values()) {
+                RootType rt = (RootType) o;
+                roots.put(rt.name, rt);
+            }
+            rootsByStmt.put(st.fullId(), roots);
+        }
+    }
+
+    /** POJO/entity class names discovered in the project, for UI autocomplete. */
+    private List<String> knownTypes() {
+        Set<String> types = new TreeSet<String>();
+        if (ifaceScanner != null) {
+            for (Map.Entry<String, Map<String, String>> e : ifaceScanner.pojoIndex.entrySet()) {
+                if (e.getKey().indexOf('.') < 0 && e.getValue() != null && !e.getValue().isEmpty()) {
+                    types.add(e.getKey());
+                }
+            }
+        }
+        return new ArrayList<String>(types);
     }
 
     /** Params whose type we could not determine -> need the user to pick once. */
@@ -107,6 +127,12 @@ public class ApiController {
                         Map<String, Object> m = new LinkedHashMap<String, Object>();
                         m.put("stmtId", st.fullId());
                         m.put("paramName", p.name);
+                        m.put("rootName", p.root());
+                        m.put("itemOf", p.itemOf);
+                        boolean collection = p.itemOf != null || isForeachCollection(st, p.name);
+                        m.put("isCollection", collection);
+                        m.put("collectionRoot", p.itemOf != null ? p.itemOf
+                                : (collection ? p.name : null));
                         m.put("declaredJdbcType", p.declaredJdbcType);
                         m.put("statementType", st.type);
                         list.add(m);
@@ -115,6 +141,13 @@ public class ApiController {
             }
         }
         return list;
+    }
+
+    private boolean isForeachCollection(Statement st, String name) {
+        for (Branch b : st.branches) {
+            if ("foreach".equals(b.kind) && name != null && name.equals(b.collectionName)) return true;
+        }
+        return false;
     }
 
     private List<Map<String, Object>> unresolvedBranches() {
@@ -132,19 +165,12 @@ public class ApiController {
     @PostMapping("/param-type")
     public Map<String, Object> saveParamType(@RequestBody Map<String, String> body) {
         store.saveParamType(body.get("stmtId"), body.get("paramName"), body.get("javaType"));
-        // reflect in memory
-        for (Statement st : statements) {
-            if (!st.fullId().equals(body.get("stmtId"))) continue;
-            for (ParamRef p : st.params) {
-                if (p.name.equals(body.get("paramName"))) {
-                    p.javaType = body.get("javaType");
-                    p.typeSource = "USER";
-                }
-            }
-        }
+        if (ifaceScanner != null) resolveAll();
         Map<String, Object> out = new LinkedHashMap<String, Object>();
         out.put("ok", true);
+        out.put("statements", statements);
         out.put("pendingTypes", pendingTypes());
+        out.put("knownTypes", knownTypes());
         return out;
     }
 

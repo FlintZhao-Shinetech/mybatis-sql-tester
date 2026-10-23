@@ -71,7 +71,10 @@ public class BranchSolver {
     private Map<String, Map<String, String>> pojoIndex = new LinkedHashMap<String, Map<String, String>>();
 
     public BranchSolver setPojoIndex(Map<String, Map<String, String>> pojoIndex) {
-        if (pojoIndex != null) this.pojoIndex = pojoIndex;
+        if (pojoIndex != null) {
+            this.pojoIndex = pojoIndex;
+            vf.setPojoIndex(pojoIndex);
+        }
         return this;
     }
 
@@ -233,23 +236,31 @@ public class BranchSolver {
 
     /** The java type of a (possibly nested) property path. */
     public String leafType(Map<String, RootType> roots, String path) {
-        if (roots == null) return null;
-        String[] parts = path.split("\\.");
+        if (roots == null || path == null) return null;
+        String clean = path.replaceAll("\\[[^\\]]*\\]", "");
+        String[] parts = clean.split("\\.");
         RootType rt = roots.get(parts[0]);
         if (rt == null) return null;
         if (parts.length == 1) return rt.javaType;
+        String t;
         if (rt.isPojo()) {
-            String t = rt.javaType;
-            for (int i = 1; i < parts.length; i++) {
-                Map<String, String> fields = pojoFields(t);
-                if (fields == null) return null;
-                t = fields.get(parts[i]);
-                if (t == null) return null;
-            }
-            return t;
+            t = rt.javaType;
+        } else if (rt.isList()) {
+            t = rt.elementType;
+        } else if (rt.isMap()) {
+            return null; // unknown value type
+        } else {
+            return null;
         }
-        if (rt.isMap()) return null; // unknown value type
-        return null;
+        if (t == null) return null;
+        for (int i = 1; i < parts.length; i++) {
+            Map<String, String> fields = i == 1 && rt.isPojo() && rt.pojoFields != null
+                    && !rt.pojoFields.isEmpty() ? rt.pojoFields : pojoFields(t);
+            if (fields == null) return null;
+            t = fields.get(parts[i]);
+            if (t == null) return null;
+        }
+        return t;
     }
 
     private Map<String, String> pojoFields(String type) {

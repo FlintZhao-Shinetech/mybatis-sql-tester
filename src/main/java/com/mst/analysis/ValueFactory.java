@@ -10,6 +10,14 @@ import java.util.*;
  */
 public class ValueFactory {
 
+    /** POJO class name -> field name -> field type, used to build nested samples. */
+    private Map<String, Map<String, String>> pojoIndex = new LinkedHashMap<String, Map<String, String>>();
+
+    public ValueFactory setPojoIndex(Map<String, Map<String, String>> pojoIndex) {
+        if (pojoIndex != null) this.pojoIndex = pojoIndex;
+        return this;
+    }
+
     /** A neutral value for a root parameter, used as the base of every test case. */
     public Object defaultFor(RootType rt) {
         if (rt == null) return null;
@@ -62,6 +70,10 @@ public class ValueFactory {
 
     /** A neutral value for a java type: numbers 0, booleans false, everything else null. */
     public Object defaultForType(String javaType, String name) {
+        return defaultForType(javaType, name, new HashSet<String>(), 0);
+    }
+
+    private Object defaultForType(String javaType, String name, Set<String> stack, int depth) {
         String base = TypeResolver.baseType(javaType);
         if (base == null) return null;
         switch (base) {
@@ -73,35 +85,88 @@ public class ValueFactory {
             case "BigDecimal": return BigDecimal.ZERO;
             case "BigInteger": return BigInteger.ZERO;
             case "Boolean": case "boolean": return Boolean.FALSE;
-            default: return null;
+            case "Character": case "char": return 'A';
+            case "List": case "Set": case "Collection": case "Iterable":
+            case "ArrayList": case "HashSet": return new ArrayList<Object>();
+            case "Map": case "HashMap": return new LinkedHashMap<String, Object>();
+            default: return pojoSample(javaType, false, stack, depth);
         }
     }
 
     /** A non-null sample value for a java type. */
     public Object sampleForType(String javaType, String name) {
+        return sampleForType(javaType, name, new HashSet<String>(), 0);
+    }
+
+    private Object sampleForType(String javaType, String name, Set<String> stack, int depth) {
         String base = TypeResolver.baseType(javaType);
         if (base == null) base = "String";
         switch (base) {
             case "Integer": case "int": return 1;
             case "Long": case "long": return 1L;
             case "Short": case "short": return (short) 1;
+            case "Byte": case "byte": return (byte) 1;
             case "Double": case "double": return 1d;
             case "Float": case "float": return 1f;
             case "BigDecimal": return new BigDecimal("1.00");
             case "BigInteger": return BigInteger.ONE;
             case "Boolean": case "boolean": return Boolean.TRUE;
+            case "Character": case "char": return 'A';
             case "Date": case "Timestamp": return new Date();
             case "LocalDate": return java.time.LocalDate.now();
             case "LocalDateTime": return java.time.LocalDateTime.now();
+            case "LocalTime": return java.time.LocalTime.now();
             case "byte[]": return new byte[]{1};
             case "Object": return "test";
+            case "List": case "Set": case "Collection": case "Iterable":
+            case "ArrayList": case "HashSet": {
+                List<Object> list = new ArrayList<Object>();
+                list.add(sampleForType(lastGenericArg(javaType), name, stack, depth + 1));
+                return list;
+            }
+            case "Map": case "HashMap": {
+                Map<String, Object> m = new LinkedHashMap<String, Object>();
+                String valueType = lastGenericArg(javaType);
+                m.put("key", sampleForType(valueType, name, stack, depth + 1));
+                return m;
+            }
             default: {
+                Object pojo = pojoSample(javaType, true, stack, depth);
+                if (pojo != null) return pojo;
                 String lower = name == null ? "" : name.toLowerCase();
                 if (lower.endsWith("id")) return "1";
                 if (lower.contains("email")) return "test@example.com";
                 return "test";
             }
         }
+    }
+
+    /**
+     * Builds a Map for a POJO field/element so that MyBatis can resolve
+     * property paths such as {@code item.userName} without needing the
+     * business classes on the classpath.
+     */
+    private Object pojoSample(String javaType, boolean sample, Set<String> stack, int depth) {
+        String base = TypeResolver.baseType(javaType);
+        Map<String, String> fields = pojoIndex.get(javaType);
+        if (fields == null) fields = pojoIndex.get(base);
+        if (fields == null) return null;
+        if (depth > 6 || !stack.add(base)) return new LinkedHashMap<String, Object>();
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        for (Map.Entry<String, String> e : fields.entrySet()) {
+            m.put(e.getKey(), sample
+                    ? sampleForType(e.getValue(), e.getKey(), stack, depth + 1)
+                    : defaultForType(e.getValue(), e.getKey(), stack, depth + 1));
+        }
+        stack.remove(base);
+        return m;
+    }
+
+    private static String lastGenericArg(String javaType) {
+        String generic = TypeResolver.genericArgs(javaType);
+        if (generic == null) return "String";
+        String[] parts = generic.split(",");
+        return parts[parts.length - 1].trim();
     }
 
     /**

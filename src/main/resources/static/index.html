@@ -59,6 +59,15 @@
   .bar { height: 6px; background: #ecf0f1; border-radius: 3px; overflow: hidden; display: inline-block;
          width: 110px; vertical-align: middle; }
   .bar > i { display: block; height: 100%; background: #27ae60; }
+  .table-scroll { overflow-x: auto; }
+  #pendingTable { table-layout: fixed; min-width: 880px; }
+  #pendingTable td { word-break: break-word; }
+  #pendingTable td:nth-child(1) { word-break: break-all; }
+  #pendingTable input, #pendingTable select { min-width: 0; width: 100%; }
+  .type-controls { display: flex; gap: 6px; align-items: center; }
+  .type-controls > select { flex: 0 0 92px; width: 92px; }
+  .type-controls > input { flex: 1; }
+  .row-hint { color: #95a5a6; font-size: 11px; margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -99,10 +108,16 @@
   <div class="card">
     <h3 style="margin-top:0">待确认参数类型</h3>
     <p class="muted">以下参数无法从代码或 XML 自动推断类型，请选择一次；结果会写入 SQLite，下次不再询问。</p>
-    <table id="pendingTable">
-      <thead><tr><th>语句</th><th>参数</th><th>已声明 jdbcType</th><th>选择 Java 类型</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="table-scroll">
+      <table id="pendingTable">
+        <colgroup>
+          <col style="width:31%"><col style="width:16%"><col style="width:11%"><col style="width:34%"><col style="width:8%">
+        </colgroup>
+        <thead><tr><th>语句</th><th>参数</th><th>已声明 jdbcType</th><th>Java 类型 / 元素类型</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <datalist id="javaTypeOptions"></datalist>
   </div>
 </div>
 
@@ -168,6 +183,7 @@ async function doScan() {
   document.getElementById('scanInfo').textContent = '扫描中…';
   const res = await api('scan', {projectPath, projectName});
   lastScan = res;
+  knownTypes = res.knownTypes || [];
   document.getElementById('scanInfo').innerHTML =
     '项目: <b>' + res.projectName + '</b> · mapper XML: ' + res.xmlCount +
     ' · 语句: ' + res.statementCount + ' · 待确认参数: ' + res.pendingTypes.length +
@@ -177,31 +193,85 @@ async function doScan() {
   renderStatements(res.statements);
 }
 
-const TYPES = ['String','Integer','Long','BigDecimal','Double','Boolean','Date','LocalDate','LocalDateTime','byte[]'];
+const SCALAR_TYPES = ['String','Integer','Long','Short','Double','Float','BigDecimal','BigInteger',
+  'Boolean','Character','byte[]','Date','Timestamp','LocalDate','LocalTime','LocalDateTime','Object'];
+const COLLECTION_TYPES = ['List','Set','Collection'];
+let knownTypes = [];
+let pendingCache = [];
 
 function renderPending(list) {
+  pendingCache = list || [];
   const tb = document.querySelector('#pendingTable tbody');
   tb.innerHTML = '';
-  if (!list || !list.length) {
+  fillDatalist('javaTypeOptions', SCALAR_TYPES.concat(['List', 'Set', 'Collection', 'Map']).concat(knownTypes));
+  if (!pendingCache.length) {
     tb.innerHTML = '<tr><td colspan="5" class="muted">无待确认参数 ✓</td></tr>';
     return;
   }
-  list.forEach(p => {
+  pendingCache.forEach((p, i) => {
+    const isItem = !!p.itemOf;
+    const isCollection = !!p.isCollection && !isItem;
+    let typeCell;
+    let hint = '';
+    if (isItem) {
+      typeCell = `<input data-role="element" data-index="${i}" list="javaTypeOptions"
+        placeholder="元素类型">`;
+      hint = 'foreach ' + escapeHtml(p.itemOf) + ' 的元素';
+    } else if (isCollection) {
+      typeCell = `<div class="type-controls">
+        <select data-role="collection" data-index="${i}">
+          ${COLLECTION_TYPES.map(t => `<option>${t}</option>`).join('')}
+        </select>
+        <input data-role="element" data-index="${i}" list="javaTypeOptions" placeholder="元素类型">
+      </div>`;
+      hint = '集合 ' + escapeHtml(p.collectionRoot || p.paramName) + ' 的元素类型';
+    } else {
+      typeCell = `<input data-role="type" data-index="${i}" list="javaTypeOptions"
+        placeholder="输入或选择 Java 类型">`;
+    }
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.stmtId}</td><td><code>${p.paramName}</code></td>
-      <td>${p.declaredJdbcType || '-'}</td>
-      <td><select id="sel_${btoa(p.stmtId+'|'+p.paramName)}">
-        ${TYPES.map(t=>`<option>${t}</option>`).join('')}</select></td>
-      <td><button class="ghost" onclick='saveType(${JSON.stringify(p)})'>保存</button></td>`;
+    tr.dataset.row = i;
+    tr.innerHTML = `<td>${escapeHtml(p.stmtId)}</td><td><code>${escapeHtml(p.paramName)}</code></td>
+      <td>${escapeHtml(p.declaredJdbcType || '-')}</td>
+      <td>${typeCell}${hint ? '<div class="row-hint">' + hint + '</div>' : ''}</td>
+      <td><button class="ghost" data-save="${i}">保存</button></td>`;
     tb.appendChild(tr);
+  });
+  tb.querySelectorAll('button[data-save]').forEach(btn => {
+    btn.onclick = () => saveType(Number(btn.dataset.save));
   });
 }
 
-async function saveType(p) {
-  const key = btoa(p.stmtId+'|'+p.paramName);
-  const v = document.getElementById('sel_'+key).value;
+function fillDatalist(id, values) {
+  const dl = document.getElementById(id);
+  if (!dl) return;
+  const seen = new Set();
+  dl.innerHTML = values.filter(v => v && !seen.has(v) && seen.add(v))
+    .map(v => `<option value="${escapeHtml(v)}"></option>`).join('');
+}
+
+async function saveType(i) {
+  const p = pendingCache[i];
+  if (!p) return;
+  const row = document.querySelector(`#pendingTable tr[data-row="${i}"]`);
+  let v;
+  if (p.itemOf) {
+    v = row.querySelector('[data-role="element"]').value.trim();
+  } else if (p.isCollection) {
+    const coll = row.querySelector('[data-role="collection"]').value;
+    const elem = row.querySelector('[data-role="element"]').value.trim() || 'Object';
+    v = coll + '<' + elem + '>';
+  } else {
+    v = row.querySelector('[data-role="type"]').value.trim();
+  }
+  if (!v) { alert('请选择或输入 Java 类型'); return; }
   const res = await api('param-type', {stmtId:p.stmtId, paramName:p.paramName, javaType:v});
   renderPending(res.pendingTypes);
+  if (res.statements) {
+    if (lastScan) lastScan.statements = res.statements;
+    renderTypes(res.statements);
+    renderStatements(res.statements);
+  }
 }
 
 function renderTypes(stmts) {

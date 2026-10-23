@@ -23,8 +23,10 @@ public class TestCaseGenerator {
 
     private final BranchSolver solver = new BranchSolver();
     private final CoverageAnalyzer coverage = new CoverageAnalyzer();
+    private Map<String, Map<String, String>> pojoIndex = new LinkedHashMap<String, Map<String, String>>();
 
     public void setPojoIndex(Map<String, Map<String, String>> pojoIndex) {
+        if (pojoIndex != null) this.pojoIndex = pojoIndex;
         solver.setPojoIndex(pojoIndex);
     }
 
@@ -71,8 +73,9 @@ public class TestCaseGenerator {
                 sol = new BranchSolver.Solution();
                 sol.params = new LinkedHashMap<String, Object>();
                 sol.solved = true;
+                ValueFactory vf = new ValueFactory().setPojoIndex(pojoIndex);
                 for (Map.Entry<String, RootType> e : roots.entrySet()) {
-                    sol.params.put(e.getKey(), new ValueFactory().sampleFor(e.getValue()));
+                    sol.params.put(e.getKey(), vf.sampleFor(e.getValue()));
                 }
                 sol.params.putAll(override);
                 manual = true;

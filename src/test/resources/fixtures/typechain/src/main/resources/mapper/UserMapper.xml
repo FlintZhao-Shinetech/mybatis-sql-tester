@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.mapper.UserMapper">
+
+    <insert id="insert" parameterType="com.example.entity.User">
+        INSERT INTO t_user (id, user_name, city)
+        VALUES (#{id}, #{userName}, #{address.city})
+    </insert>
+
+    <insert id="batchInsert">
+        INSERT INTO t_user (id, city) VALUES
+        <foreach collection="users" item="user" separator=",">
+            (#{user.id}, #{user.address.city}, #{user.city})
+        </foreach>
+    </insert>
+
+    <update id="updateUnknown">
+        UPDATE t_user SET tenant_id = #{tenantCode}
+    </update>
+
+</mapper>

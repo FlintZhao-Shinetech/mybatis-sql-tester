@@ -28,16 +28,36 @@ public class TypeResolver {
     }
 
     public void resolve(Statement st) {
+        resolve(st, Collections.<String, String>emptyMap());
+    }
+
+    /**
+     * @param userTypes parameter name -> java type confirmed by the user
+     *                  (already persisted in the decision store)
+     */
+    public void resolve(Statement st, Map<String, String> userTypes) {
         List<InterfaceScanner.ParamInfo> sig = lookupSignature(st);
         Map<String, RootType> roots = new LinkedHashMap<>();
 
         // 1. roots referenced by #{} / ${}
         for (ParamRef pr : st.params) {
             if (pr.itemOf != null) {
-                // foreach item: its type comes from the collection element type
-                String elem = elementTypeOf(itemRootType(st, roots, pr.itemOf, sig), pr.name);
-                if (elem != null && !elem.equals("Object")) {
-                    pr.javaType = elem;
+                // foreach item: its type comes from the collection element type;
+                // for #{item.field} continue into the element class
+                RootType coll = itemRootType(st, roots, pr.itemOf, sig);
+                String elem = collectionElementType(coll, pr.itemOf);
+                String jt = null;
+                String itemPath = itemPropertyPath(pr.name);
+                if (itemPath != null && elem != null) {
+                    jt = fieldTypeOf(elem, itemPath);
+                    if (jt == null && ("Map".equals(baseType(elem)) || "Object".equals(elem))) {
+                        jt = "Object";
+                    }
+                } else if (itemPath == null) {
+                    jt = elem;
+                }
+                if (jt != null && !jt.equals("Object")) {
+                    pr.javaType = jt;
                     pr.typeSource = "SOURCE";
                 } else {
                     pr.javaType = heuristicType(pr.name, st);
@@ -91,6 +111,8 @@ public class TypeResolver {
             }
         }
 
+        applyUserTypes(st, roots, userTypes);
+
         st.rootTypes = new LinkedHashMap<>();
         st.rootTypes.putAll(roots);
     }
@@ -105,14 +127,165 @@ public class TypeResolver {
         return rt;
     }
 
-    private String elementTypeOf(RootType rt, String itemName) {
+    private String elementTypeOf(RootType rt) {
         if (rt == null) return null;
-        if (rt.elementType != null) return rt.elementType;
-        if (rt.isPojo() && rt.pojoFields != null) {
-            // collection of POJOs: use the first field type as a hint
-            return rt.pojoFields.isEmpty() ? null : rt.pojoFields.values().iterator().next();
+        return rt.elementType;
+    }
+
+    /** Element type of a collection root or of a nested collection property. */
+    private String collectionElementType(RootType rt, String collectionPath) {
+        if (rt == null || collectionPath == null) return null;
+        if (!collectionPath.contains(".")) return rt.elementType;
+        if (!rt.isPojo()) return rt.elementType;
+        String fieldPath = collectionPath.substring(collectionPath.indexOf('.') + 1);
+        String fieldType = fieldTypeOf(rt.javaType, fieldPath);
+        if (fieldType == null) return null;
+        return fromJavaType("item", fieldType, "SOURCE").elementType;
+    }
+
+    /** For a foreach item reference returns the property path after the item name. */
+    private static String itemPropertyPath(String name) {
+        String path = cleanPath(name);
+        return path.contains(".") ? path.substring(path.indexOf('.') + 1) : null;
+    }
+
+    /** Removes array/index markers such as {@code [0]} from a property path. */
+    private static String cleanPath(String path) {
+        if (path == null) return null;
+        return path.replaceAll("\\[[^\\]]*\\]", "");
+    }
+
+    /**
+     * Applies the types confirmed by the user. This has to update the root
+     * types as well, otherwise the chosen type would not take part in the
+     * generated test cases.
+     */
+    private void applyUserTypes(Statement st, Map<String, RootType> roots, Map<String, String> userTypes) {
+        if (userTypes == null || userTypes.isEmpty()) return;
+        for (ParamRef pr : st.params) {
+            String override = userTypes.get(pr.name);
+            if (override == null || override.trim().isEmpty()) continue;
+            override = override.trim();
+            pr.javaType = override;
+            pr.typeSource = "USER";
+
+            if (pr.itemOf != null) {
+                applyItemType(st, roots, pr, override);
+                continue;
+            }
+
+            String root = pr.root();
+            RootType rt = roots.get(root);
+            if (pr.name.equals(root)) {
+                roots.put(root, fromJavaType(root, override, "USER"));
+                continue;
+            }
+
+            // nested property: record the type on the owning class so that
+            // value generation and OGNL evaluation can use it as well
+            String fieldPath = cleanPath(pr.name);
+            if (fieldPath.contains(".")) fieldPath = fieldPath.substring(fieldPath.indexOf('.') + 1);
+            if (rt == null) {
+                rt = new RootType();
+                rt.name = root;
+                rt.kind = RootType.POJO;
+                rt.source = "USER";
+                roots.put(root, rt);
+            }
+            String owner = rt.isPojo() ? rt.javaType : (rt.isList() ? rt.elementType : null);
+            if (owner != null) {
+                setFieldOverride(owner, fieldPath, override);
+                if (rt.isPojo()) rt.pojoFields = new LinkedHashMap<>(fieldMap(owner));
+            }
         }
-        return null;
+
+        // a confirmed collection type may make foreach item types resolvable
+        for (ParamRef pr : st.params) {
+            if (pr.itemOf == null || userTypes.containsKey(pr.name)) continue;
+            String rootName = pr.itemOf.contains(".")
+                    ? pr.itemOf.substring(0, pr.itemOf.indexOf('.')) : pr.itemOf;
+            RootType coll = roots.get(rootName);
+            String elem = collectionElementType(coll, pr.itemOf);
+            String itemPath = itemPropertyPath(pr.name);
+            String jt = itemPath != null && elem != null ? fieldTypeOf(elem, itemPath) : elem;
+            if (jt == null && itemPath != null && elem != null
+                    && ("Map".equals(baseType(elem)) || "Object".equals(elem))) {
+                jt = "Object";
+            }
+            if (jt != null) {
+                pr.javaType = jt;
+                pr.typeSource = "SOURCE";
+            } else if (itemPath != null) {
+                pr.javaType = null;
+                pr.typeSource = "UNKNOWN";
+            }
+        }
+    }
+
+    private void applyItemType(Statement st, Map<String, RootType> roots, ParamRef pr, String override) {
+        String collection = pr.itemOf;
+        String rootName = collection.contains(".") ? collection.substring(0, collection.indexOf('.')) : collection;
+        RootType rt = roots.get(rootName);
+        if (rt == null) {
+            rt = new RootType();
+            rt.name = rootName;
+            rt.kind = RootType.LIST;
+            rt.source = "USER";
+            roots.put(rootName, rt);
+        }
+
+        String itemPath = itemPropertyPath(pr.name);
+        if (itemPath != null) {
+            String elem = collectionElementType(rt, collection);
+            if (elem != null) setFieldOverride(elem, itemPath, override);
+            return;
+        }
+
+        if (collection.contains(".")) {
+            // nested collection field such as user.ids
+            String fieldPath = collection.substring(collection.indexOf('.') + 1);
+            String owner = rt.isPojo() ? rt.javaType : (rt.isList() ? rt.elementType : null);
+            if (owner != null) {
+                String old = fieldTypeOf(owner, fieldPath);
+                String base = baseType(old);
+                if (base == null) base = "List";
+                setFieldOverride(owner, fieldPath, base + "<" + override + ">");
+                if (rt.isPojo()) rt.pojoFields = new LinkedHashMap<>(fieldMap(owner));
+            }
+            return;
+        }
+
+        rt.kind = RootType.LIST;
+        rt.elementType = override;
+        if (rt.javaType == null || rt.javaType.equals("Object")) {
+            rt.javaType = "List<" + override + ">";
+        }
+    }
+
+    private void setFieldOverride(String ownerType, String fieldPath, String value) {
+        if (ownerType == null || fieldPath == null || fieldPath.isEmpty()) return;
+        String path = cleanPath(fieldPath);
+        String head = path.contains(".") ? path.substring(0, path.indexOf('.')) : path;
+        String rest = path.contains(".") ? path.substring(path.indexOf('.') + 1) : null;
+        Map<String, String> fields = fieldMap(ownerType);
+        if (rest == null) {
+            fields.put(head, value);
+            return;
+        }
+        String next = fields.get(head);
+        if (next != null) setFieldOverride(next, rest, value);
+    }
+
+    private Map<String, String> fieldMap(String type) {
+        if (type == null) return new LinkedHashMap<String, String>();
+        Map<String, String> fields = ifaceScanner.pojoIndex.get(type);
+        if (fields == null) fields = ifaceScanner.pojoIndex.get(baseType(type));
+        if (fields == null) {
+            fields = new LinkedHashMap<String, String>();
+            ifaceScanner.pojoIndex.put(baseType(type), fields);
+            ifaceScanner.pojoIndex.put(type, fields);
+        }
+        return fields;
     }
 
     private RootType resolveRoot(String root, ParamRef pr, List<InterfaceScanner.ParamInfo> sig, Statement st) {
@@ -132,9 +305,9 @@ public class TypeResolver {
                 InterfaceScanner.ParamInfo only = sig.get(0);
                 String fieldType = fieldTypeOf(only.javaType, root);
                 if (fieldType != null) {
-                    rt = fromJavaType(root, fieldType, "SOURCE");
-                    rt.kind = RootType.SCALAR;
-                    return rt;
+                    // let fromJavaType decide whether this is a scalar, a
+                    // collection or another POJO that still has to be explored
+                    return fromJavaType(root, fieldType, "SOURCE");
                 }
                 if (!only.annotated && !isSimple(only.javaType)) {
                     // the root itself is the (only) object
@@ -163,13 +336,21 @@ public class TypeResolver {
     }
 
     private String leafType(String root, String paramName, RootType rt, List<InterfaceScanner.ParamInfo> sig) {
-        if (!paramName.contains(".")) {
+        String path = cleanPath(paramName);
+        if (!path.contains(".")) {
             return rt.javaType;
         }
-        String field = paramName.substring(paramName.indexOf('.') + 1);
+        String field = path.substring(path.indexOf('.') + 1);
         if (rt.isPojo()) {
             String ft = fieldTypeOf(rt.javaType, field);
             if (ft != null) return ft;
+        }
+        if (rt.isList()) {
+            String elem = elementTypeOf(rt);
+            if (elem != null) {
+                String ft = fieldTypeOf(elem, field);
+                if (ft != null) return ft;
+            }
         }
         if (rt.isMap()) {
             return "Object";
@@ -178,16 +359,17 @@ public class TypeResolver {
     }
 
     /** Resolves a (possibly nested) field path on a POJO type. */
-    private String fieldTypeOf(String pojoType, String fieldPath) {
+    public String fieldTypeOf(String pojoType, String fieldPath) {
         if (pojoType == null || fieldPath == null) return null;
-        String head = fieldPath.contains(".") ? fieldPath.substring(0, fieldPath.indexOf('.')) : fieldPath;
+        String path = cleanPath(fieldPath);
+        String head = path.contains(".") ? path.substring(0, path.indexOf('.')) : path;
         Map<String, String> fields = ifaceScanner.pojoIndex.get(pojoType);
         if (fields == null) fields = ifaceScanner.pojoIndex.get(baseType(pojoType));
         if (fields == null) return null;
         String ft = fields.get(head);
         if (ft == null) return null;
-        if (fieldPath.contains(".")) {
-            String rest = fieldPath.substring(fieldPath.indexOf('.') + 1);
+        if (path.contains(".")) {
+            String rest = path.substring(path.indexOf('.') + 1);
             String deeper = fieldTypeOf(ft, rest);
             if (deeper != null) return deeper;
         }
@@ -205,6 +387,12 @@ public class TypeResolver {
         if (base == null) {
             rt.kind = RootType.UNKNOWN;
             rt.source = RootType.UNKNOWN;
+            return rt;
+        }
+        String trimmed = javaType.trim();
+        if (trimmed.endsWith("[]") && !"byte[]".equals(trimmed)) {
+            rt.kind = RootType.LIST;
+            rt.elementType = trimmed.substring(0, trimmed.length() - 2);
             return rt;
         }
         if (base.equals("Map")) {
@@ -272,7 +460,7 @@ public class TypeResolver {
             case "Short": case "short": case "Boolean": case "boolean":
             case "Date": case "LocalDate": case "LocalDateTime": case "LocalTime":
             case "Timestamp": case "byte[]": case "Object": case "CharSequence":
-            case "List": case "Set": case "Collection": case "Map": case "BigInteger":
+            case "Character": case "char": case "Byte": case "byte": case "BigInteger":
                 return true;
             default:
                 return false;

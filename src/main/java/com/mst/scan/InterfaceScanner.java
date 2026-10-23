@@ -34,6 +34,9 @@ public class InterfaceScanner {
     /** POJO class simple-name -> field name -> javaType. Only collected loosely. */
     public final Map<String, Map<String, String>> pojoIndex = new LinkedHashMap<>();
 
+    /** class simple-name/FQN -> direct super class type ("BaseEntity" / "BaseEntity<Long>"). */
+    public final Map<String, String> superIndex = new LinkedHashMap<>();
+
     public static class ParamInfo {
         public String name;
         public String javaType;
@@ -61,6 +64,7 @@ public class InterfaceScanner {
                 // Skip unparseable files; source trees often contain generated code.
             }
         }
+        mergeInheritedFields();
     }
 
     private void parseFile(Path file) throws Exception {
@@ -103,11 +107,64 @@ public class InterfaceScanner {
                     fields.putIfAbsent(prop, javaTypeName(m.getType()));
                 }
             });
-            if (!fields.isEmpty()) {
-                pojoIndex.put(decl.getNameAsString(), fields);
-                decl.getFullyQualifiedName().ifPresent(fqn -> pojoIndex.put(fqn, fields));
-            }
+            // Index every class (even without fields) so subclasses can inherit
+            // fields from a parent that itself only declares getters.
+            pojoIndex.put(decl.getNameAsString(), fields);
+            decl.getFullyQualifiedName().ifPresent(fqn -> pojoIndex.put(fqn, fields));
+            decl.getExtendedTypes().stream().findFirst().ifPresent(t -> {
+                String superType = javaTypeName(t);
+                superIndex.put(decl.getNameAsString(), superType);
+                decl.getFullyQualifiedName().ifPresent(fqn -> superIndex.put(fqn, superType));
+            });
         });
+    }
+
+    /**
+     * Copies fields declared in super classes into every subclass so that
+     * inherited properties such as {@code BaseEntity.id} can be resolved.
+     * Subclass declarations win over inherited ones.
+     */
+    private void mergeInheritedFields() {
+        Set<String> done = new HashSet<>();
+        for (String type : pojoIndex.keySet()) {
+            mergeInheritedFields(type, done, new HashSet<String>());
+        }
+    }
+
+    private void mergeInheritedFields(String type, Set<String> done, Set<String> visiting) {
+        if (type == null || done.contains(type) || !visiting.add(type)) return;
+        Map<String, String> fields = pojoIndex.get(type);
+        String superType = superIndex.get(type);
+        if (fields == null || superType == null) {
+            done.add(type);
+            return;
+        }
+        String superName = rawType(superType);
+        Map<String, String> superFields = fieldMapOf(superName);
+        if (superFields != null && superFields != fields) {
+            mergeInheritedFields(superName, done, visiting);
+            for (Map.Entry<String, String> e : superFields.entrySet()) {
+                fields.putIfAbsent(e.getKey(), e.getValue());
+            }
+        }
+        done.add(type);
+    }
+
+    private Map<String, String> fieldMapOf(String type) {
+        if (type == null) return null;
+        Map<String, String> fields = pojoIndex.get(type);
+        if (fields == null) {
+            int dot = type.lastIndexOf('.');
+            if (dot >= 0) fields = pojoIndex.get(type.substring(dot + 1));
+        }
+        return fields;
+    }
+
+    private static String rawType(String type) {
+        if (type == null) return null;
+        int lt = type.indexOf('<');
+        if (lt >= 0) type = type.substring(0, lt);
+        return type.trim();
     }
 
     private static String paramName(Parameter prm, int idx, int total) {

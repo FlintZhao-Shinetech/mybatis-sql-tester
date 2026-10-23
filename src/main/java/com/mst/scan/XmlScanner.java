@@ -269,11 +269,14 @@ public class XmlScanner {
             ParamRef pr = new ParamRef(name);
             pr.declaredJdbcType = jdbcType;
             pr.raw = raw;
-            // is this a foreach item? ({@code #{item}} or {@code #{item[0]}})
+            // is this a foreach item? ({@code #{item}}, {@code #{item[0]}}
+            // or a property of the item such as {@code #{item.name}})
             String itemOf = null;
             String itemName = name;
             int bracket = itemName.indexOf('[');
             if (bracket > 0) itemName = itemName.substring(0, bracket);
+            int dot = itemName.indexOf('.');
+            if (dot > 0) itemName = itemName.substring(0, dot);
             if (itemCollections.containsKey(itemName)) {
                 itemOf = itemCollections.get(itemName);
             }

@@ -114,7 +114,7 @@ CREATE TABLE t_user (
 
 1. 人工确认（从 SQLite 读回，来源标记 `USER`）；
 2. `#{id,jdbcType=BIGINT}` 这类显式 `jdbcType`（`JDBC_TYPE`）；
-3. Mapper 接口方法签名（`@Param` 名、单参数对象属性、`paramN` 序号）与 POJO 字段（`SOURCE`）；
+3. Mapper 接口方法签名（`@Param` 名、单参数对象属性、`paramN` 序号）与 POJO 字段（`SOURCE`，支持嵌套对象字段、父类继承字段、`List<User>` 等泛型集合元素字段）；
 4. 启发式推断：按分支表达式中的用法（与数字比较→整数、与字符串比较→`String`）及命名约定（`*Id`→`Long`、含 `time`/`date`→`Date`）（`HEURISTIC`）；
 5. 仍无法判断 → `UNKNOWN`，进入「参数确认」页。
 
@@ -122,7 +122,11 @@ CREATE TABLE t_user (
 
 「参数确认」页只展示**无法推断**的参数（如 `${}`、Map 的未知 key、多参数方法未加 `@Param`）。
 
-选择一次后写入 SQLite（`param_type` 表），后续扫描自动套用，来源标记为 `USER`。
+- 普通参数：选择或输入 Java 类型，下拉项包含常用标量类型与项目内扫描到的类名，也可手动输入自定义类型；
+- `List` / `Set` 等集合参数：先选集合类型，再选元素类型（如 `List` + `Long` → `List<Long>`）；
+- `<foreach>` 的 item 参数：只需选择元素类型。
+
+选择一次后写入 SQLite（`param_type` 表），后续扫描自动套用，来源标记为 `USER`，并立即参与测试用例生成。
 
 ### 3. 生成测试 SQL 并执行
 
